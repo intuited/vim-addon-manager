@@ -1,7 +1,55 @@
 " vam#install contains code which is used when install plugins only
 
-let s:curl = exists('g:netrw_http_cmd') ? g:netrw_http_cmd : 'curl -o'
-exec vam#DefineAndBind('s:c','g:vim_addon_manager','{}')
+" Determine the system command and option string.
+" Uses the same command used by netrw if available;
+" otherwise defaults to attempt to use `curl`.
+" Note that the netrw commands will only be used
+" if netrw has previously been used in this vim instance,
+" for example in a command like `:edit http://www.example.com`.
+" Returns: a List containing the system command
+"   and, if it exists, its destination option string.
+"   The option string is to be appended after the URL
+"   and before the destination filename.
+fun! vam#install#GetCurlCommandBasis()
+  if exists('g:netrw_http_cmd')
+    if exists('g:netrw_http_xcmd')
+      " The `xcmd` may, depending on the utility used by netrw,
+      " work via shell redirection, i.e. `>` (see |g:netrw_http_xcmd|)
+      " and therefore needs to be inserted after the URL.
+      return [g:netrw_http_cmd, g:netrw_http_xcmd]
+    else
+      " The netrw docs don't specify that the xcmd is always defined,
+      " even if g:netrw_http_cmd is.
+      return [g:netrw_http_cmd]
+    endif
+  else
+    " Default to using curl.
+    " TODO: figure out if an exception should be thrown
+    "       if curl is not available on the system path
+    return ['curl', '-o']
+  endif
+endfun
+
+" Build a system command to download `a:url` to `a:destination`
+" Returns: a List of Strings which can be joined by spaces to make the command
+fun! vam#install#BuildCurlCommand(url, destination)
+  let [url, destination] = map([a:url, a:destination], 'shellescape(v:val)')
+
+  let command_basis = vam#install#GetCurlCommandBasis()
+
+  return [command_basis[0], url] + command_basis[1:] + [destination]
+endfun
+
+" Fetch `a:url` and save it to the filename `a:destination`.
+" Returns: the exit status of the system command (non-zero indicates error)
+fun! vam#install#Curl(url, destination)
+  exec '!' join(vam#install#BuildCurlCommand(a:url, a:destination), ' ')
+
+  return v:shell_error
+endfun
+
+
+exec vam#DefineAndBind('s:c','g:vim_script_manager','{}')
 
 let s:c.name_rewriting = get(s:c, 'name_rewriting', {})
 call extend(s:c.name_rewriting, {'99git+github': 'vam#install#RewriteName'})
@@ -36,8 +84,10 @@ fun! vam#install#ReplaceAndFetchUrls(list)
     let n = l[idx]
     " assume n is either an url or a path
     if n =~ '^http://' && s:confirm('Fetch plugin info from URL '.n.'?')
-      let t = tempfile()
-      exec '!'.s:curl.' '.t.' > '.s:shellescape(t)
+      " TODO: maybe acquire code from netrw's s:GetTempfile
+      "       from autoload/netrw.vim
+      let t = tempname()
+      call vam#install#Curl(n, t)
     elseif n =~  '[/\\]' && filereadable(n)
       let t = n
     endif
@@ -594,7 +644,7 @@ endfun
 
 if g:is_win
   fun! vam#install#FetchAdditionalWindowsTools() abort
-    if !executable("curl") && s:curl == "curl -o"
+    if !executable("curl") && vam#install#GetCurlCommandBasis()[0] == 'curl'
       throw "No curl found. Either set g:netrw_http_cmd='path/curl -o' or put it in PATH"
     endif
     if !isdirectory(s:c['binary_utils'].'\dist')
