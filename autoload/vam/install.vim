@@ -6,27 +6,30 @@
 " Note that the netrw commands will only be used
 " if netrw has previously been used in this vim instance,
 " for example in a command like `:edit http://www.example.com`.
-" Returns: a List containing the system command
-"   and, if it exists, its destination option string.
+" Returns: a Dictionary containing the system command ('cmd')
+"   and, if it exists, its destination option string ('xcmd').
 "   The option string is to be appended after the URL
 "   and before the destination filename.
+"   The Dictionary can also contain an 'opts' key,
+"   whose value is a List of arguments.  The 'opts' arguments
+"   will be inserted between the 'cmd' and the URL.
 fun! vam#install#GetCurlCommandBasis()
   if exists('g:netrw_http_cmd')
     if exists('g:netrw_http_xcmd')
       " The `xcmd` may, depending on the utility used by netrw,
       " work via shell redirection, i.e. `>` (see |g:netrw_http_xcmd|)
       " and therefore needs to be inserted after the URL.
-      return [g:netrw_http_cmd, g:netrw_http_xcmd]
+      return {'cmd': g:netrw_http_cmd, 'xcmd': g:netrw_http_xcmd}
     else
       " The netrw docs don't specify that the xcmd is always defined,
       " even if g:netrw_http_cmd is.
-      return [g:netrw_http_cmd]
+      return {'cmd': g:netrw_http_cmd}
     endif
   else
     " Default to using curl.
     " TODO: figure out if an exception should be thrown
     "       if curl is not available on the system path
-    return ['curl', '-o']
+    return {'cmd': 'curl', 'opts': ['-L'], 'xcmd': '-o'}
   endif
 endfun
 
@@ -37,7 +40,13 @@ fun! vam#install#BuildCurlCommand(url, destination)
 
   let command_basis = vam#install#GetCurlCommandBasis()
 
-  return [command_basis[0], url] + command_basis[1:] + [destination]
+  let ret = [command_basis.cmd] + get(command_basis, 'opts', []) + [url]
+  if has_key(command_basis, 'xcmd')
+    let ret += [command_basis.xcmd]
+  endif
+  let ret += [destination]
+
+  return ret
 endfun
 
 " Fetch `a:url` and save it to the filename `a:destination`.
@@ -111,7 +120,7 @@ endfun
 fun! vam#install#Install(toBeInstalledList, ...)
   let toBeInstalledList = vam#install#ReplaceAndFetchUrls(a:toBeInstalledList)
   let opts = a:0 == 0 ? {} : a:1
-  let auto_install = s:c['auto_install'] || get(opts,'auto_install',0)
+  let auto_install = get(s:c, 'auto_install') || get(opts, 'auto_install', 0)
   for name in toBeInstalledList
     " make sure all sources are known
     if vam#IsPluginInstalled(name)
@@ -644,7 +653,7 @@ endfun
 
 if g:is_win
   fun! vam#install#FetchAdditionalWindowsTools() abort
-    if !executable("curl") && vam#install#GetCurlCommandBasis()[0] == 'curl'
+    if !executable("curl") && vam#install#GetCurlCommandBasis()['cmd'] == 'curl'
       throw "No curl found. Either set g:netrw_http_cmd='path/curl -o' or put it in PATH"
     endif
     if !isdirectory(s:c['binary_utils'].'\dist')
